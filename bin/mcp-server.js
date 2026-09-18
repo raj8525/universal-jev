@@ -3,6 +3,8 @@ import { createInterface } from 'node:readline';
 import { JevClient } from '../src/client.js';
 import { decideChoice, decideNoul, decideScore, guardCommand } from '../src/primitives.js';
 import { compactMessages, normalizeMessages } from '../src/compactor.js';
+import { recordPruneEvent } from '../src/telemetry.js';
+
 
 let client = null;
 function getClient() {
@@ -120,6 +122,15 @@ async function handleToolCall(name, args) {
       const result = await compactMessages(c, msgs, {
         truncateHeadChars: args.truncateHeadChars ?? 250,
       });
+      if (result && result.stats) {
+        const charsSaved = Math.max(0, (result.stats.beforeTokens - result.stats.afterTokens) * 4);
+        recordPruneEvent({
+          agent: args.agent || 'Antigravity/MCP',
+          command: `jev_compact (${result.stats.dropped} dropped, ${result.stats.truncated} truncated)`,
+          originalChars: result.stats.beforeTokens * 4,
+          prunedChars: result.stats.afterTokens * 4,
+        });
+      }
       return result;
     }
     case 'jev_decide_choice': {
