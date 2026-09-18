@@ -1,0 +1,36 @@
+{
+  "name": "universal-jev",
+  "version": "1.0.0",
+  "description": "Universal TypeSafe Jev Runtime Plugin & MCP Server for Coding Agents (Codex, Pi, DSH, OpenCode, Antigravity)",
+  "type": "module",
+  "main": "./src/index.js",
+  "bin": {
+    "jev": "./bin/jev.js",
+    "universal-jev-mcp": "./bin/mcp-server.js"
+  },
+  "scripts": {
+    "test": "node ./test/test-all.js",
+    "start": "node ./bin/mcp-server.js"
+  },
+  "keywords": [
+    "typesafe",
+    "jev",
+    "mcp",
+    "compaction",
+    "agent",
+    "codex",
+    "pi",
+    "opencode",
+    "antigravity",
+    "dsh"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/raj8525/universal-jev.git"
+  },
+  "author": "raj8525",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  }
+}
