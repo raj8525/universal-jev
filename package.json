@@ -6,7 +6,8 @@
   "main": "./src/index.js",
   "bin": {
     "jev": "./bin/jev.js",
-    "universal-jev-mcp": "./bin/mcp-server.js"
+    "universal-jev-mcp": "./bin/mcp-server.js",
+    "universal-jev-codex-hook": "./bin/codex-hook.js"
   },
   "scripts": {
     "test": "node ./test/test-all.js",
