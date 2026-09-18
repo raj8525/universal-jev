@@ -35,16 +35,23 @@ export function normalizeMessages(raw) {
 }
 
 export const PROTECTED_EXTENSIONS = [
-  '.gd', '.tres', '.tscn', // Godot
-  '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', // Web / Node
-  '.py', '.pyi', // Python
-  '.rs', // Rust
-  '.go', // Go
-  '.c', '.cpp', '.cc', '.cxx', '.h', '.hpp', // C/C++
-  '.java', '.kt', '.swift', // Mobile / JVM
-  '.json', '.toml', '.yaml', '.yml', '.xml', // Configs
-  '.md', '.txt', '.sql', '.sh', '.zsh', '.bash', // Docs / Shell
-  '.css', '.scss', '.html', '.vue', '.svelte' // Frontend
+  // Game Dev & Shaders
+  '.gd', '.tres', '.tscn', '.gdshader', '.shader', '.hlsl', '.glsl', '.wgsl', '.frag', '.vert',
+  // Web & Node / TypeScript
+  '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.vue', '.svelte', '.html', '.css', '.scss', '.sass', '.less',
+  // Systems & Native
+  '.c', '.cpp', '.cc', '.cxx', '.h', '.hpp', '.hxx', '.rs', '.go', '.zig', '.odin', '.nim',
+  // JVM & Mobile
+  '.java', '.kt', '.kts', '.scala', '.swift', '.m', '.mm', '.dart',
+  // .NET & Windows
+  '.cs', '.fs', '.vb', '.csproj', '.sln',
+  // Dynamic & Scripting
+  '.py', '.pyi', '.rb', '.rake', '.php', '.lua', '.pl', '.pm', '.sh', '.bash', '.zsh', '.fish', '.bat', '.cmd', '.ps1',
+  // Data & Configs & Markup
+  '.json', '.jsonc', '.json5', '.toml', '.yaml', '.yml', '.xml', '.ini', '.conf', '.env', '.dockerfile',
+  '.md', '.markdown', '.rst', '.txt', '.sql', '.graphql', '.gql', '.proto',
+  // Assembly & Low-level
+  '.asm', '.s', '.wat', '.wast'
 ];
 
 export const CODE_INSPECTION_TOOLS = new Set([
@@ -52,7 +59,27 @@ export const CODE_INSPECTION_TOOLS = new Set([
   'find_by_name', 'list_dir', 'file_search', 'read_resource', 'fs_read'
 ]);
 
-export function isProtectedCall(toolName, input) {
+export const CODE_CONTENT_HEURISTICS = [
+  /^#!\s*\/(usr\/|bin\/)/m, // Shebang
+  /^\s*(import|from\s+\w+\s+import|require\s*\(|package\s+|using\s+|#include\s+)/m, // Imports
+  /^\s*(func\s+|def\s+|fn\s+|pub\s+fn\s+|class\s+|struct\s+|interface\s+|enum\s+|namespace\s+)/m, // Declarations
+  /^\s*(extends\s+|class_name\s+|@export|@onready)/m, // Godot
+  /^\s*<\?php/m, // PHP
+  /^\s*<!DOCTYPE\s+html>/im, // HTML
+  /^\s*SELECT\s+.*\s+FROM\s+/im // SQL
+];
+
+export function hasCodeSignature(text) {
+  if (!text || typeof text !== 'string') return false;
+  // Inspect the first 2000 characters
+  const sample = text.slice(0, 2000);
+  for (const pattern of CODE_CONTENT_HEURISTICS) {
+    if (pattern.test(sample)) return true;
+  }
+  return false;
+}
+
+export function isProtectedCall(toolName, input, output = '') {
   const normTool = (toolName || '').toLowerCase();
   if (CODE_INSPECTION_TOOLS.has(normTool)) return true;
 
@@ -73,6 +100,11 @@ export function isProtectedCall(toolName, input) {
         if (lower.includes(ext)) return true;
       }
     }
+  }
+
+  // Content-based heuristic: if output has code signatures, protect it
+  if (output && typeof output === 'string' && hasCodeSignature(output)) {
+    return true;
   }
 
   return false;

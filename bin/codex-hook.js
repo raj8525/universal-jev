@@ -59,7 +59,7 @@ async function main() {
     }
 
     // Rule 2: Absolute code protection barrier (never prune project source code)
-    if (isProtectedCall(toolName, toolInput)) {
+    if (isProtectedCall(toolName, toolInput, toolResponse)) {
       process.stdout.write('{}\n');
       process.exit(0);
     }
