@@ -61,10 +61,10 @@ if [ -f "$HOME/.codex/config.toml" ]; then
   if grep -q '\[mcp_servers\.jev\]' "$HOME/.codex/config.toml"; then
     echo "✓ Codex: already configured"
   else
-    cat << 'EOF' >> "$HOME/.codex/config.toml"
+    cat << EOF >> "$HOME/.codex/config.toml"
 
 [mcp_servers.jev]
-command = "/Users/yangyu/.local/bin/universal-jev-mcp"
+command = "$BIN_DIR/universal-jev-mcp"
 args = []
 startup_timeout_sec = 60
 EOF

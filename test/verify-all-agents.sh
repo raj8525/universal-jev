@@ -47,8 +47,8 @@ fi
 
 echo ""
 echo "[5/5] Verifying Pi MCP & Skill Integration..."
-PI_CONFIG_CHECK=$(test -f /Users/yangyu/.pi/agent/mcp.json && grep -q '"jev"' /Users/yangyu/.pi/agent/mcp.json && echo "mcp.json verified" || true)
-PI_SKILL_CHECK=$(test -L /Users/yangyu/.pi/agent/skills/typesafe-ai && echo "skill link verified" || true)
+PI_CONFIG_CHECK=$(test -f "$HOME/.pi/agent/mcp.json" && grep -q '"jev"' "$HOME/.pi/agent/mcp.json" && echo "mcp.json verified" || true)
+PI_SKILL_CHECK=$(test -L "$HOME/.pi/agent/skills/typesafe-ai" && echo "skill link verified" || true)
 if [[ -n "$PI_CONFIG_CHECK" && -n "$PI_SKILL_CHECK" ]]; then
   echo "✓ Pi: $PI_CONFIG_CHECK & $PI_SKILL_CHECK"
   PASSED=$((PASSED+1))
