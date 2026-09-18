@@ -127,23 +127,27 @@ export function smartFormatPrunedText(originalText, headLines = 10, tailLines = 
 /**
  * Universal verbatim context compaction using Jev
  */
-export async function compactMessages(client, messages, options = {}) {
-  const keepThreshold = options.keepThreshold ?? 0.5;
-  const preserveRecent = options.preserveRecentMessages ?? 4;
-  const truncateHeadChars = options.truncateHeadChars ?? 250;
+export async function compactMessages(client, rawMessages, options = {}) {
+  const preserveRecent = options.preserveRecent ?? 8;
+  const imageDehydration = dehydrateImages(rawMessages, options.minImageRounds ?? 3);
+  const messages = imageDehydration.messages;
 
   if (!messages || messages.length <= preserveRecent + 1) {
+    const beforeTokens = estimateTokens(JSON.stringify(rawMessages));
+    const afterTokens = estimateTokens(JSON.stringify(messages));
     return {
       messages,
       decisions: [],
       stats: {
-        beforeTokens: estimateTokens(JSON.stringify(messages)),
-        afterTokens: estimateTokens(JSON.stringify(messages)),
-        reductionRatio: 0,
+        beforeTokens,
+        afterTokens,
+        reductionRatio: beforeTokens > 0 ? (beforeTokens - afterTokens) / beforeTokens : 0,
         kept: 0,
         truncated: 0,
         dropped: 0,
         pinned: messages.length,
+        dehydratedImages: imageDehydration.dehydratedCount,
+        imageTokensSaved: imageDehydration.tokensSaved,
       },
     };
   }
@@ -357,7 +361,7 @@ export async function compactMessages(client, messages, options = {}) {
     return true;
   });
 
-  const beforeTokens = estimateTokens(JSON.stringify(messages));
+  const beforeTokens = estimateTokens(JSON.stringify(rawMessages));
   const afterTokens = estimateTokens(JSON.stringify(cloned));
   const reductionRatio = beforeTokens > 0 ? (beforeTokens - afterTokens) / beforeTokens : 0;
 
@@ -366,13 +370,111 @@ export async function compactMessages(client, messages, options = {}) {
     decisions,
     stats: {
       beforeTokens,
-
       afterTokens,
       reductionRatio: Math.max(0, reductionRatio),
       kept: keptCount,
       truncated: truncatedCount,
       dropped: droppedCount,
       pinned: calls.filter((c) => c.pinned).length,
+      dehydratedImages: imageDehydration.dehydratedCount,
+      imageTokensSaved: imageDehydration.tokensSaved,
     },
   };
 }
+
+/**
+ * 历史图片脱水机制 (Image Payload Eviction)
+ * 当用户发送的 Base64 图片已经被模型回答过指定轮数（默认 >= 3 轮）之后，
+ * 自动将其超大 Base64 载荷替换为轻量标记文本，释放海量上下文预算。
+ * 
+ * @param {Array} messages 消息列表
+ * @param {number} minRoundsThreshold 触发脱水的后续回答轮数门槛（默认 3 轮）
+ * @returns {{ messages: Array, dehydratedCount: number, charsSaved: number, tokensSaved: number }}
+ */
+export function dehydrateImages(messages, minRoundsThreshold = 3) {
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return { messages, dehydratedCount: 0, charsSaved: 0, tokensSaved: 0 };
+  }
+
+  let dehydratedCount = 0;
+  let charsSaved = 0;
+  let modified = false;
+
+  // Clone messages
+  const cloned = messages.map((m) => {
+    if (!m) return m;
+    if (Array.isArray(m.content)) {
+      return { ...m, content: m.content.map((p) => ({ ...p })) };
+    }
+    return { ...m };
+  });
+
+  for (let i = 0; i < cloned.length; i++) {
+    const msg = cloned[i];
+    if (msg.role !== 'user' || !Array.isArray(msg.content)) {
+      continue;
+    }
+
+    // Check if this message has any image parts
+    const hasImages = msg.content.some((p) => {
+      if (p.type === 'image' && (p.data || (p.source && p.source.data))) return true;
+      if (p.type === 'image_url' && p.image_url) return true;
+      return false;
+    });
+
+    if (!hasImages) continue;
+
+    // Count how many assistant messages have occurred AFTER this user message
+    let assistantRoundsAfter = 0;
+    for (let j = i + 1; j < cloned.length; j++) {
+      if (cloned[j].role === 'assistant') {
+        assistantRoundsAfter++;
+      }
+    }
+
+    // Only dehydrate if model has answered at least minRoundsThreshold turns after this image
+    if (assistantRoundsAfter < minRoundsThreshold) {
+      continue;
+    }
+
+    // Dehydrate the image parts in this message
+    for (let pIdx = 0; pIdx < msg.content.length; pIdx++) {
+      const part = msg.content[pIdx];
+      let imgDataLen = 0;
+
+      if (part.type === 'image') {
+        if (typeof part.data === 'string') {
+          imgDataLen = part.data.length;
+        } else if (part.source && typeof part.source.data === 'string') {
+          imgDataLen = part.source.data.length;
+        }
+      } else if (part.type === 'image_url' && part.image_url) {
+        const url = typeof part.image_url === 'string' ? part.image_url : part.image_url.url;
+        if (typeof url === 'string') {
+          imgDataLen = url.length;
+        }
+      }
+
+      // Only dehydrate large images (> 1000 chars)
+      if (imgDataLen > 1000) {
+        dehydratedCount++;
+        charsSaved += imgDataLen;
+        modified = true;
+        const estTokens = Math.round(imgDataLen / 4);
+        msg.content[pIdx] = {
+          type: 'text',
+          text: `[系统说明: 原始图片 Base64 载荷已在前期跨越 ${assistantRoundsAfter} 轮交互后由 Universal Jev 自动脱水，已释放约 ${estTokens.toLocaleString()} tokens 预算，前期模型的视觉解析结论仍完整保留在上下文中]`
+        };
+      }
+    }
+  }
+
+  const tokensSaved = Math.round(charsSaved / 4);
+  return {
+    messages: modified ? cloned : messages,
+    dehydratedCount,
+    charsSaved,
+    tokensSaved,
+  };
+}
+
