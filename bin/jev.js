@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { JevClient } from '../src/client.js';
 import { decideChoice, decideNoul, decideScore, guardCommand } from '../src/primitives.js';
 import { compactMessages, normalizeMessages } from '../src/compactor.js';
+import { renderStatsDashboard } from '../src/telemetry.js';
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -16,7 +17,7 @@ Usage:
   jev status                               Check provider connectivity & latency
   jev noul <question> [--state <text>]     Yes/No calibrated probability (0~1)
   jev choice <question> --criteria <opts>  Multi-choice decision (e.g. "a:desc,b:desc")
-  jev score <question> --criteria <levels> Rubric scoring (e.g. "low,med,high")
+  jev stats (or gain)                      Display context compaction savings analytics
   jev guard <command>                      Security & loop check for commands
   jev compact <file> [--out <file>]        Verbatim context compaction of transcript
   jev mcp                                  Run as Stdio MCP server
@@ -39,6 +40,11 @@ async function main() {
 
   if (command === 'mcp') {
     await import('./mcp-server.js');
+    return;
+  }
+
+  if (command === 'stats' || command === 'gain') {
+    renderStatsDashboard();
     return;
   }
 

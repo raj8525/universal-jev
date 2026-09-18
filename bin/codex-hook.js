@@ -10,6 +10,7 @@
 
 import fs from 'node:fs';
 import { isProtectedCall, smartFormatPrunedText } from '../src/compactor.js';
+import { recordPruneEvent } from '../src/telemetry.js';
 
 const PRUNE_THRESHOLD_CHARS = 4000;
 
@@ -67,6 +68,13 @@ async function main() {
     // Rule 3: Prune massive transient terminal dumps (build logs, test noise, stack dumps)
     const pruned = smartFormatPrunedText(toolResponse, 12, 35);
     if (pruned && pruned.length < toolResponse.length) {
+      recordPruneEvent({
+        agent: 'Codex(GPT-6)',
+        command: typeof toolInput?.command === 'string' ? toolInput.command : 'Bash',
+        originalChars: toolResponse.length,
+        prunedChars: pruned.length
+      });
+
       const response = {
         updatedMCPToolOutput: pruned,
         additionalContext: `[Universal Jev] Pruned ${toolResponse.length - pruned.length} chars of transient log output to protect GPT-6 context budget.`
