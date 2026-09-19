@@ -3,6 +3,7 @@ import { createInterface } from 'node:readline';
 import { JevClient } from '../src/client.js';
 import { decideChoice, decideNoul, decideScore, guardCommand } from '../src/primitives.js';
 import { compactMessages, normalizeMessages } from '../src/compactor.js';
+import { extractJevReceipt } from '../src/receipt.js';
 import { recordPruneEvent } from '../src/telemetry.js';
 
 
@@ -106,11 +107,33 @@ const TOOLS = [
       properties: {},
     },
   },
+  {
+    name: 'jev_receipt',
+    description:
+      'Audit and dehydrate long terminal or tool output into a verified receipt or isolated diagnostic with 100% LLM transparency.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        command: { type: 'string', description: 'Command or tool name executed' },
+        output: { type: 'string', description: 'Raw long terminal or tool output to dehydrate' },
+        thresholdChars: { type: 'number', description: 'Threshold chars to trigger dehydration (default 1200)' },
+      },
+      required: ['output'],
+    },
+  },
 ];
 
 async function handleToolCall(name, args) {
   const c = getClient();
   switch (name) {
+    case 'jev_receipt': {
+      return await extractJevReceipt(c, {
+        toolName: args.command || 'terminal',
+        toolInput: { command: args.command || 'terminal' },
+        output: args.output,
+        thresholdChars: args.thresholdChars || 1200,
+      });
+    }
     case 'jev_compact': {
       let msgs = args.messages;
       if (!msgs && args.rawJson) {
