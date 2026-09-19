@@ -61,6 +61,20 @@ async function runTests() {
   await testMcpServer();
   console.log('[PASS] MCP Server JSON-RPC stdio protocol verified!');
 
+  console.log('\n=== Step 4: Testing Jev-Verified Receipt Extractor ===');
+  const { extractJevReceipt } = await import('../src/receipt.js');
+  const sampleLogs = 'LOG line\n'.repeat(60) + 'Tests: 60 passed, 0 failed\n';
+  const receiptTest = await extractJevReceipt(client, {
+    toolName: 'bash',
+    toolInput: { command: 'npm test' },
+    output: sampleLogs,
+    thresholdChars: 500,
+  });
+  if (!receiptTest.shouldPrune || !receiptTest.content.includes('[Jev Verified Receipt ✓]')) {
+    throw new Error('Receipt extractor failed to generate verified receipt!');
+  }
+  console.log(`[PASS] Receipt extractor verified: ${receiptTest.charsSaved} chars saved with transparent LLM notice!`);
+
   console.log('\nALL UNIVERSAL JEV PLUGIN TESTS PASSED SUCCESSFULLY! ✓');
 }
 

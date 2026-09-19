@@ -10,9 +10,19 @@
 
 import fs from 'node:fs';
 import { isProtectedCall, smartFormatPrunedText } from '../src/compactor.js';
+import { extractJevReceipt } from '../src/receipt.js';
+import { JevClient } from '../src/client.js';
 import { recordPruneEvent } from '../src/telemetry.js';
 
-const PRUNE_THRESHOLD_CHARS = 4000;
+let jevClient = null;
+function getClient() {
+  if (!jevClient) {
+    jevClient = new JevClient();
+  }
+  return jevClient;
+}
+
+const PRUNE_THRESHOLD_CHARS = 1200;
 
 async function main() {
   let raw = '';
@@ -51,39 +61,57 @@ async function main() {
     process.exit(0);
   }
 
-  // 2. PostToolUse Hook: In-flight output pruning with absolute source code protection
+  // 2. PostToolUse Hook: Jev-Verified Receipt Dehydration with source code immunity
   if (eventName === 'PostToolUse' && typeof toolResponse === 'string') {
-    // Rule 1: Zero-latency passthrough for outputs under threshold
-    if (toolResponse.length <= PRUNE_THRESHOLD_CHARS) {
+    // Zero-latency passthrough for small outputs
+    if (toolResponse.length < PRUNE_THRESHOLD_CHARS) {
       process.stdout.write('{}\n');
       process.exit(0);
     }
 
-    // Rule 2: Absolute code protection barrier (never prune project source code)
+    // Absolute code protection barrier (never prune project source code)
     if (isProtectedCall(toolName, toolInput, toolResponse)) {
       process.stdout.write('{}\n');
       process.exit(0);
     }
 
-    // Rule 3: Prune massive transient terminal dumps (build logs, test noise, stack dumps)
-    const pruned = smartFormatPrunedText(toolResponse, 12, 35);
-    if (pruned && pruned.length < toolResponse.length) {
-      recordPruneEvent({
-        agent: 'Codex(GPT-6)',
-        command: typeof toolInput?.command === 'string' ? toolInput.command : 'Bash',
-        originalChars: toolResponse.length,
-        prunedChars: pruned.length
+    try {
+      const client = getClient();
+      const receiptResult = await extractJevReceipt(client, {
+        toolName,
+        toolInput,
+        output: toolResponse,
+        thresholdChars: PRUNE_THRESHOLD_CHARS,
       });
 
-      const response = {
-        updatedMCPToolOutput: pruned,
-        additionalContext: `[Universal Jev] Pruned ${toolResponse.length - pruned.length} chars of transient log output to protect GPT-6 context budget.`
-      };
-      process.stdout.write(JSON.stringify(response) + '\n');
-      process.exit(0);
+      if (receiptResult && receiptResult.shouldPrune) {
+        recordPruneEvent({
+          agent: 'Codex(GPT-6)',
+          command: typeof toolInput?.command === 'string' ? toolInput.command : toolName || 'Bash',
+          originalChars: toolResponse.length,
+          prunedChars: receiptResult.content.length,
+        });
+
+        const response = {
+          updatedMCPToolOutput: receiptResult.content,
+          additionalContext: `[Universal Jev] Output dehydrated into verified receipt (${receiptResult.charsSaved} chars saved) to protect GPT-6 context budget.`,
+        };
+        process.stdout.write(JSON.stringify(response) + '\n');
+        process.exit(0);
+      }
+    } catch (auditErr) {
+      // Fallback to mechanical compaction if receipt extraction encounters error
+      const pruned = smartFormatPrunedText(toolResponse, 10, 30);
+      if (pruned && pruned.length < toolResponse.length) {
+        const response = {
+          updatedMCPToolOutput: pruned,
+          additionalContext: `[Universal Jev] Pruned ${toolResponse.length - pruned.length} chars of transient log output to protect GPT-6 context budget.`,
+        };
+        process.stdout.write(JSON.stringify(response) + '\n');
+        process.exit(0);
+      }
     }
   }
-
   // Default passthrough
   process.stdout.write('{}\n');
 }

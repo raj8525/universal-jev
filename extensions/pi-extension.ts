@@ -2,13 +2,21 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { spawnSync } from "node:child_process";
 import { isProtectedCall, smartFormatPrunedText, dehydrateImages } from "/Users/yangyu/.agents/plugins/universal-jev/src/compactor.js";
+import { extractJevReceipt } from "/Users/yangyu/.agents/plugins/universal-jev/src/receipt.js";
+import { JevClient } from "/Users/yangyu/.agents/plugins/universal-jev/src/client.js";
 import { recordPruneEvent } from "/Users/yangyu/.agents/plugins/universal-jev/src/telemetry.js";
-
+import fs from "node:fs";
 
 const JEV_CLI = "/Users/yangyu/.local/bin/jev";
-const PRUNE_THRESHOLD_CHARS = 4000;
+const PRUNE_THRESHOLD_CHARS = 1200;
 
-import fs from "node:fs";
+let jevClientInstance: any = null;
+function getJevClient() {
+  if (!jevClientInstance) {
+    jevClientInstance = new JevClient();
+  }
+  return jevClientInstance;
+}
 
 export default function (pi: ExtensionAPI) {
   try {
@@ -17,10 +25,10 @@ export default function (pi: ExtensionAPI) {
 
   // 1. Session start notice
   pi.on("session_start", async (_event, ctx) => {
-    ctx.ui.notify("Universal Jev Compactor & Decision Engine Loaded ✓", "info");
+    ctx.ui.notify("Universal Jev Compactor & Verified Receipt Engine Loaded ✓", "info");
   });
 
-  // 2. In-flight tool result pruning (Automatic 95% noise reduction with source code immunity)
+  // 2. In-flight tool result dehydration (Jev-Verified Receipt with source code immunity)
   pi.on("tool_result", async (event, ctx) => {
     const { toolName, toolCallId, input, content } = event;
     if (!content || !Array.isArray(content)) return;
@@ -33,18 +41,33 @@ export default function (pi: ExtensionAPI) {
           continue;
         }
 
-        // Prune massive transient terminal output
-        const pruned = smartFormatPrunedText(part.text, 12, 35);
-        if (pruned && pruned.length < part.text.length) {
-          const savings = part.text.length - pruned.length;
-          recordPruneEvent({
-            agent: 'Pi',
-            command: typeof input?.command === 'string' ? input.command : toolName,
-            originalChars: part.text.length,
-            prunedChars: pruned.length
+        try {
+          const client = getJevClient();
+          const receipt = await extractJevReceipt(client, {
+            toolName,
+            toolInput: input,
+            output: part.text,
+            thresholdChars: PRUNE_THRESHOLD_CHARS,
           });
-          part.text = pruned;
-          ctx.ui.notify(`[Jev] Pruned ${savings} chars of transient log output to protect context budget.`, "info");
+
+          if (receipt && receipt.shouldPrune) {
+            recordPruneEvent({
+              agent: 'Pi',
+              command: typeof input?.command === 'string' ? input.command : toolName,
+              originalChars: part.text.length,
+              prunedChars: receipt.content.length,
+            });
+            part.text = receipt.content;
+            ctx.ui.notify(`[Jev] 成功脱水为验证收据，节省 ${receipt.charsSaved} 字符上下文！`, "info");
+          }
+        } catch (err) {
+          // Fallback to mechanical compaction if receipt extraction encounters error
+          const pruned = smartFormatPrunedText(part.text, 10, 30);
+          if (pruned && pruned.length < part.text.length) {
+            const savings = part.text.length - pruned.length;
+            part.text = pruned;
+            ctx.ui.notify(`[Jev] Pruned ${savings} chars of transient log output.`, "info");
+          }
         }
       }
     }
