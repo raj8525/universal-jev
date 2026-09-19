@@ -69,6 +69,34 @@ export const CODE_CONTENT_HEURISTICS = [
   /^\s*SELECT\s+.*\s+FROM\s+/im // SQL
 ];
 
+export const DIFF_SIGNATURES = [
+  /^(diff --git\s+[ab]\/.*|--- [ab]\/.*|\+\+\+ [ab]\/.*)/m,
+  /^@@\s+-\d+(?:,\d+)?\s+\+\d+(?:,\d+)?\s+@@/m,
+  /^Index:\s+.*\n={10,}/m,
+  /^\*\*\*\s+\d+,\d+\s+\*\*\*\*/m,
+];
+
+export function hasDiffSignature(text) {
+  if (!text || typeof text !== 'string') return false;
+  const sample = text.slice(0, 3000);
+  for (const pattern of DIFF_SIGNATURES) {
+    if (pattern.test(sample)) return true;
+  }
+  return false;
+}
+
+export const DIFF_COMMAND_PATTERNS = [
+  /\b(git\s+(diff|show|log\s+-p)|svn\s+diff|hg\s+diff|patch)\b/i,
+];
+
+export const CODE_VIEW_COMMANDS = /\b(cat|bat|less|more|head|tail|grep|rg|ag|sed|awk)\b/i;
+
+export const SHELL_RUNNER_TOOLS = new Set([
+  'bash', 'run_command', 'exec_command', 'execute_command', 'terminal', 'sh', 'zsh', 'command'
+]);
+
+export const ERROR_PATTERNS = /\b(?:error(?:\[[A-Za-z0-9_-]+\])?|fatal|exception|traceback|panic|failed|failure|segfault|segmentation fault|undefined symbol|assertion failed|syntaxerror|runtimeerror|typeerror|nullpointerexception|referenceerror|script error)\b/i;
+
 export function hasCodeSignature(text) {
   if (!text || typeof text !== 'string') return false;
   // Inspect the first 2000 characters
@@ -81,30 +109,44 @@ export function hasCodeSignature(text) {
 
 export function isProtectedCall(toolName, input, output = '') {
   const normTool = (toolName || '').toLowerCase();
+  
+  // 1. Dedicated file and diff inspection tools
   if (CODE_INSPECTION_TOOLS.has(normTool)) return true;
+  if (normTool.includes('diff') || normTool.includes('patch')) return true;
 
   const inputStr = typeof input === 'string' ? input : JSON.stringify(input || {});
-  const lower = inputStr.toLowerCase();
 
-  // Check if referencing source code files
-  for (const ext of PROTECTED_EXTENSIONS) {
-    if (lower.includes(ext)) {
-      return true;
-    }
+  // 2. Diff and patch commands (git diff, git show, svn diff, patch)
+  for (const pattern of DIFF_COMMAND_PATTERNS) {
+    if (pattern.test(inputStr)) return true;
   }
 
-  // Check common code read commands inside bash
-  if (normTool === 'bash' || normTool === 'exec_command' || normTool === 'execute_command') {
-    if (/\b(cat|bat|less|head|tail|view_file|read_file|grep|rg|ag)\b/i.test(inputStr)) {
+  // 3. Content signature protection: diffs or pure source code files in output
+  if (output && typeof output === 'string') {
+    if (hasDiffSignature(output)) return true;
+    if (hasCodeSignature(output)) return true;
+  }
+
+  const lower = inputStr.toLowerCase();
+
+  // 4. Shell runner tools (bash, run_command, etc.)
+  if (SHELL_RUNNER_TOOLS.has(normTool) || !normTool) {
+    // Only protect if the command is actively viewing/reading source code
+    if (CODE_VIEW_COMMANDS.test(inputStr)) {
       for (const ext of PROTECTED_EXTENSIONS) {
         if (lower.includes(ext)) return true;
       }
     }
+    // Execution commands (e.g. python, node, blender, godot, cargo) are NOT protected
+    // on their arguments alone, allowing their runtime stdout/stderr to be safely compacted
+    return false;
   }
 
-  // Content-based heuristic: if output has code signatures, protect it
-  if (output && typeof output === 'string' && hasCodeSignature(output)) {
-    return true;
+  // 5. Non-shell tools referencing protected source code files directly
+  for (const ext of PROTECTED_EXTENSIONS) {
+    if (lower.includes(ext)) {
+      return true;
+    }
   }
 
   return false;
@@ -122,6 +164,60 @@ export function smartFormatPrunedText(originalText, headLines = 10, tailLines = 
   const omittedCount = lines.length - headLines - tailLines;
 
   return `${head}\n\n[... Jev Compactor: ${omittedCount} lines of repetitive runtime log/dump pruned to protect context window ...]\n\n${tail}`;
+}
+
+/**
+ * Intelligent error diagnostic formatting:
+ * Automatically isolates middle errors and stack traces with surrounding context,
+ * ensuring no critical error trace is pruned even if located thousands of lines into the log.
+ */
+export function formatDiagnosticErrorTrace(output, { headLines = 5, tailLines = 15, errorContextBefore = 4, errorContextAfter = 20 } = {}) {
+  if (!output || typeof output !== 'string') return '';
+  const lines = output.split('\n');
+  if (lines.length <= headLines + tailLines + 10) {
+    return output;
+  }
+
+  // Search for the first significant error line
+  let errorLineIdx = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (ERROR_PATTERNS.test(lines[i])) {
+      errorLineIdx = i;
+      break;
+    }
+  }
+
+  // If no error found or error is already within head or tail window, use standard smartFormatPrunedText
+  if (errorLineIdx === -1 || errorLineIdx < headLines || errorLineIdx >= lines.length - tailLines) {
+    return smartFormatPrunedText(output, headLines, tailLines);
+  }
+
+  // The error is in the intermediate body! Extract context window around it.
+  const startErr = Math.max(headLines, errorLineIdx - errorContextBefore);
+  const endErr = Math.min(lines.length - tailLines, errorLineIdx + errorContextAfter + 1);
+
+  const head = lines.slice(0, headLines).join('\n');
+  const middleErr = lines.slice(startErr, endErr).join('\n');
+  const tail = lines.slice(-tailLines).join('\n');
+
+  const omittedBefore = startErr - headLines;
+  const omittedAfter = (lines.length - tailLines) - endErr;
+
+  const parts = [head];
+
+  if (omittedBefore > 0) {
+    parts.push(`\n[... Jev Guard: ${omittedBefore} lines of routine runtime logs omitted ...]`);
+  }
+
+  parts.push(middleErr);
+
+  if (omittedAfter > 0) {
+    parts.push(`\n[... Jev Guard: ${omittedAfter} lines of trailing logs omitted ...]`);
+  }
+
+  parts.push(tail);
+
+  return parts.join('\n');
 }
 
 /**

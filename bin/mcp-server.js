@@ -117,6 +117,7 @@ const TOOLS = [
         command: { type: 'string', description: 'Command or tool name executed' },
         output: { type: 'string', description: 'Raw long terminal or tool output to dehydrate' },
         thresholdChars: { type: 'number', description: 'Threshold chars to trigger dehydration (default 1200)' },
+        exitCode: { type: 'number', description: 'Process exit code if known (non-zero triggers instant diagnostic)' },
       },
       required: ['output'],
     },
@@ -131,6 +132,7 @@ async function handleToolCall(name, args) {
         toolName: args.command || 'terminal',
         toolInput: { command: args.command || 'terminal' },
         output: args.output,
+        exitCode: args.exitCode,
         thresholdChars: args.thresholdChars || 1200,
       });
     }

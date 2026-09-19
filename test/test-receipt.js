@@ -79,7 +79,89 @@ error: could not compile \`app\`
   console.log(failureResult.content);
   console.log('--------------------------\n');
 
-  console.log('ALL RECEIPT EXTRACTOR TESTS PASSED! ✓');
+  // Test 4: Unified Diff / Patch Immunity
+  console.log('Test 4: Verifying Unified Diff & Patch immunity...');
+  const gitDiffOutput = [
+    'diff --git a/src/server.ts b/src/server.ts',
+    'index 1234567..89abcdef 100644',
+    '--- a/src/server.ts',
+    '+++ b/src/server.ts',
+    '@@ -15,6 +15,12 @@ export class HttpServer {',
+    '+  private securityToken: string;',
+    '+  constructor(token: string) {',
+    '+    this.securityToken = token;',
+    '+  }',
+  ].join('\n') + '\n+  // Context padding\n'.repeat(40);
+
+  const diffResult = await extractJevReceipt(client, {
+    toolName: 'run_command',
+    toolInput: { command: 'git diff HEAD~1' },
+    output: gitDiffOutput,
+  });
+  assert.strictEqual(diffResult.shouldPrune, false, 'Git Diffs must NEVER be pruned!');
+  console.log('✓ Unified Diff absolute immunity verified.');
+
+  // Test 5: Exit-Code Fast-Path
+  console.log('Test 5: Verifying Exit-Code Fast-Path...');
+  const fastPathLogs = 'Starting runner...\n' + 'Processing task item...\n'.repeat(40) + 'Failed on step 32\n';
+  const fastPathResult = await extractJevReceipt(client, {
+    toolName: 'bash',
+    toolInput: { command: 'make build' },
+    output: fastPathLogs,
+    exitCode: 2,
+  });
+  assert.strictEqual(fastPathResult.shouldPrune, true, 'Non-zero exit code must be pruned into diagnostic!');
+  assert.strictEqual(fastPathResult.status, 'failure', 'Must immediately register as failure!');
+  assert.strictEqual(fastPathResult.confidence, 1.0, 'Must have 1.0 deterministic confidence!');
+  assert(fastPathResult.content.includes('Exit Code: 2'), 'Must mention Exit Code: 2!');
+  console.log('✓ Exit-Code Fast-Path verified (0ms LLM roundtrip).');
+
+  // Test 6: Smart Anchor Sampling for Intermediate Error (e.g. Godot/Blender headless run)
+  console.log('Test 6: Verifying Smart Anchor Sampling for intermediate errors...');
+  let godotHeadlessLogs = 'Godot Engine v4.3.stable.official (c) 2007-present Juan Linietsky, Ariel Manzur.\n';
+  for (let i = 1; i <= 40; i++) {
+    godotHeadlessLogs += `[ResourceLoader] Loading resource res://assets/model_${i}.tres (OK)\n`;
+  }
+  godotHeadlessLogs += `
+SCRIPT ERROR: Parse Error: Identifier "CharacterBody3D" is not defined in this scope.
+          at: GDScript::reload (res://scripts/player.gd:42)
+ERROR: Failed to instantiate scene "res://scenes/main.tscn".
+`;
+  for (let i = 1; i <= 40; i++) {
+    godotHeadlessLogs += `[RenderingServer] Routine render pass ${i} clean.\n`;
+  }
+  godotHeadlessLogs += 'Orphan StringName: 12\nOrphan Resources: 3\n';
+
+  const middleErrorResult = await extractJevReceipt(client, {
+    toolName: 'run_command',
+    toolInput: { command: 'godot --headless --path . -s tests/run.gd' },
+    output: godotHeadlessLogs,
+  });
+
+  assert.strictEqual(middleErrorResult.shouldPrune, true, 'Middle error logs must be pruned!');
+  assert(middleErrorResult.content.includes('[Jev Diagnostic Warning ⚠️]'), 'Must be flagged as diagnostic warning!');
+  assert(middleErrorResult.content.includes('SCRIPT ERROR'), 'Must isolate the middle script error!');
+  assert(middleErrorResult.content.includes('player.gd:42'), 'Must preserve the exact file and line of the error!');
+  console.log('✓ Smart Anchor Sampling caught intermediate error in middle of 90+ lines.');
+
+  // Test 7: Runtime execution with script arguments (e.g. python3 run.py)
+  console.log('Test 7: Verifying runtime script execution allows receipt pruning...');
+  let pythonRunLogs = 'Running data pipeline...\n';
+  for (let i = 1; i <= 50; i++) {
+    pythonRunLogs += `Processed batch ${i}/50: 1000 records loaded, loss=0.012\n`;
+  }
+  pythonRunLogs += 'Pipeline completed successfully in 4.2s.\n';
+
+  const pythonResult = await extractJevReceipt(client, {
+    toolName: 'run_command',
+    toolInput: { command: 'python3 train_pipeline.py --epochs 50' },
+    output: pythonRunLogs,
+  });
+  assert.strictEqual(pythonResult.shouldPrune, true, 'Passing python execution output must be dehydrated into receipt!');
+  assert(pythonResult.content.includes('[Jev Verified Receipt ✓]'), 'Must generate Verified Receipt!');
+  console.log('✓ Runtime execution with .py argument successfully generates receipt.');
+
+  console.log('\nALL 7 RECEIPT EXTRACTOR TESTS PASSED! ✓');
 }
 
 runTests().catch((err) => {

@@ -9,7 +9,7 @@
  */
 
 import fs from 'node:fs';
-import { isProtectedCall, smartFormatPrunedText } from '../src/compactor.js';
+import { isProtectedCall, smartFormatPrunedText, formatDiagnosticErrorTrace } from '../src/compactor.js';
 import { extractJevReceipt } from '../src/receipt.js';
 import { JevClient } from '../src/client.js';
 import { recordPruneEvent } from '../src/telemetry.js';
@@ -52,6 +52,14 @@ async function main() {
   const toolName = event.tool_name || event.tool || '';
   const toolInput = event.tool_input || event.input || {};
   const toolResponse = event.tool_response || event.output || '';
+  const exitCode =
+    event.exit_code ??
+    event.exitCode ??
+    event.status ??
+    toolInput?.exit_code ??
+    toolInput?.exitCode ??
+    toolInput?.code ??
+    null;
 
   // 1. PreToolUse Hook: Ensure safety and compatibility
   if (eventName === 'PreToolUse') {
@@ -69,7 +77,7 @@ async function main() {
       process.exit(0);
     }
 
-    // Absolute code protection barrier (never prune project source code)
+    // Absolute code protection barrier (never prune project source code or diffs)
     if (isProtectedCall(toolName, toolInput, toolResponse)) {
       process.stdout.write('{}\n');
       process.exit(0);
@@ -81,6 +89,7 @@ async function main() {
         toolName,
         toolInput,
         output: toolResponse,
+        exitCode,
         thresholdChars: PRUNE_THRESHOLD_CHARS,
       });
 
@@ -100,8 +109,8 @@ async function main() {
         process.exit(0);
       }
     } catch (auditErr) {
-      // Fallback to mechanical compaction if receipt extraction encounters error
-      const pruned = smartFormatPrunedText(toolResponse, 10, 30);
+      // Fallback to error-isolated mechanical compaction if receipt extraction encounters error
+      const pruned = formatDiagnosticErrorTrace(toolResponse, { headLines: 10, tailLines: 30 });
       if (pruned && pruned.length < toolResponse.length) {
         const response = {
           updatedMCPToolOutput: pruned,

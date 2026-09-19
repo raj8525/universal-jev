@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { spawnSync } from "node:child_process";
-import { isProtectedCall, smartFormatPrunedText, dehydrateImages } from "/Users/yangyu/.agents/plugins/universal-jev/src/compactor.js";
+import { isProtectedCall, smartFormatPrunedText, formatDiagnosticErrorTrace, dehydrateImages } from "/Users/yangyu/.agents/plugins/universal-jev/src/compactor.js";
 import { extractJevReceipt } from "/Users/yangyu/.agents/plugins/universal-jev/src/receipt.js";
 import { JevClient } from "/Users/yangyu/.agents/plugins/universal-jev/src/client.js";
 import { recordPruneEvent } from "/Users/yangyu/.agents/plugins/universal-jev/src/telemetry.js";
@@ -28,15 +28,24 @@ export default function (pi: ExtensionAPI) {
     ctx.ui.notify("Universal Jev Compactor & Verified Receipt Engine Loaded ✓", "info");
   });
 
-  // 2. In-flight tool result dehydration (Jev-Verified Receipt with source code immunity)
+  // 2. In-flight tool result dehydration (Jev-Verified Receipt with source code and diff immunity)
   pi.on("tool_result", async (event, ctx) => {
     const { toolName, toolCallId, input, content } = event;
     if (!content || !Array.isArray(content)) return;
 
+    const exitCode =
+      (event as any).exitCode ??
+      (event as any).exit_code ??
+      (event as any).status ??
+      (input as any)?.exitCode ??
+      (input as any)?.exit_code ??
+      (input as any)?.code ??
+      null;
+
     for (let i = 0; i < content.length; i++) {
       const part = content[i];
       if (part.type === "text" && typeof part.text === "string" && part.text.length > PRUNE_THRESHOLD_CHARS) {
-        // Zero-destructive protection barrier for project source code
+        // Zero-destructive protection barrier for project source code and diffs
         if (isProtectedCall(toolName, input, part.text)) {
           continue;
         }
@@ -47,6 +56,7 @@ export default function (pi: ExtensionAPI) {
             toolName,
             toolInput: input,
             output: part.text,
+            exitCode,
             thresholdChars: PRUNE_THRESHOLD_CHARS,
           });
 
@@ -61,8 +71,8 @@ export default function (pi: ExtensionAPI) {
             ctx.ui.notify(`[Jev] 成功脱水为验证收据，节省 ${receipt.charsSaved} 字符上下文！`, "info");
           }
         } catch (err) {
-          // Fallback to mechanical compaction if receipt extraction encounters error
-          const pruned = smartFormatPrunedText(part.text, 10, 30);
+          // Fallback to error-isolated mechanical compaction if receipt extraction encounters error
+          const pruned = formatDiagnosticErrorTrace(part.text, { headLines: 10, tailLines: 30 });
           if (pruned && pruned.length < part.text.length) {
             const savings = part.text.length - pruned.length;
             part.text = pruned;
