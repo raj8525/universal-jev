@@ -21,11 +21,13 @@ fi
 
 # 2. Link CLI and MCP binaries
 mkdir -p "$BIN_DIR"
-chmod +x "$DIR/bin/jev.js" "$DIR/bin/mcp-server.js" "$DIR/bin/codex-hook.js"
+chmod +x "$DIR/bin/jev.js" "$DIR/bin/mcp-server.js" "$DIR/bin/codex-hook.js" "$DIR/bin/ego-browse.js"
 ln -sf "$DIR/bin/jev.js" "$BIN_DIR/jev"
 ln -sf "$DIR/bin/mcp-server.js" "$BIN_DIR/universal-jev-mcp"
 ln -sf "$DIR/bin/codex-hook.js" "$BIN_DIR/universal-jev-codex-hook"
+ln -sf "$DIR/bin/ego-browse.js" "$BIN_DIR/ego-browse"
 echo "✓ Installed CLI to $BIN_DIR/jev"
+echo "✓ Installed Unified Browser CLI to $BIN_DIR/ego-browse"
 echo "✓ Installed MCP Server to $BIN_DIR/universal-jev-mcp"
 echo "✓ Installed Codex Hook to $BIN_DIR/universal-jev-codex-hook"
 

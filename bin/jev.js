@@ -19,6 +19,7 @@ Usage:
   jev choice <question> --criteria <opts>  Multi-choice decision (e.g. "a:desc,b:desc")
   jev stats (or gain)                      Display context compaction savings analytics
   jev guard <command>                      Security & loop check for commands
+  jev browse <url> <goal>                  Autonomous 2-Tier browser task
   jev compact <file> [--out <file>]        Verbatim context compaction of transcript
   jev mcp                                  Run as Stdio MCP server
   `);
@@ -40,6 +41,19 @@ async function main() {
 
   if (command === 'mcp') {
     await import('./mcp-server.js');
+    return;
+  }
+
+  if (command === 'browse') {
+    const url = args[1];
+    const goal = args[2];
+    if (!url || !goal) {
+      console.error('Error: URL and goal required. e.g. jev browse https://example.com "Verify page title"');
+      process.exit(1);
+    }
+    // Forward args to ego-browse
+    process.argv = [process.argv[0], process.argv[1], url, goal, ...args.slice(3)];
+    await import('./ego-browse.js');
     return;
   }
 
