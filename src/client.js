@@ -8,12 +8,7 @@ export const OPENROUTER_MODEL = '~typesafe/jev-latest';
 export const TYPESAFE_ENDPOINT = 'https://api.typesafe.ai/v1/systemone';
 export const TYPESAFE_MODEL = 'jev-latest';
 
-export function resolveApiKey(options = {}) {
-  if (options.apiKey) return options.apiKey;
-  if (process.env.OPENROUTER_API_KEY) return process.env.OPENROUTER_API_KEY;
-  if (process.env.TYPESAFE_API_KEY) return process.env.TYPESAFE_API_KEY;
-
-  // Fallback to local config files
+function readLocalConfigs() {
   const candidateFiles = [
     join(homedir(), '.agents', 'skills', 'typesafe-ai', 'config.json'),
     join(homedir(), '.gemini', 'config', 'skills', 'typesafe-ai', 'config.json'),
@@ -22,34 +17,81 @@ export function resolveApiKey(options = {}) {
     if (existsSync(file)) {
       try {
         const data = JSON.parse(readFileSync(file, 'utf-8'));
-        if (data.api_key) return data.api_key;
-        if (data.openrouter_api_key) return data.openrouter_api_key;
+        if (data && typeof data === 'object') return data;
       } catch {}
     }
   }
-  return undefined;
+  return {};
+}
+
+export function resolveCredentials(options = {}) {
+  const localConfig = readLocalConfigs();
+
+  // 1. Primary official TypeSafe API Key
+  const typesafeKey =
+    options.typesafeApiKey ||
+    (options.apiKey && (options.apiKey.startsWith('apikey_') || options.apiKey.startsWith('ts-')) ? options.apiKey : null) ||
+    process.env.TYPESAFE_API_KEY ||
+    localConfig.typesafe_api_key ||
+    (localConfig.api_key && (localConfig.api_key.startsWith('apikey_') || localConfig.api_key.startsWith('ts-')) ? localConfig.api_key : null);
+
+  // 2. Backup / Fallback OpenRouter API Key
+  const openrouterKey =
+    options.openrouterApiKey ||
+    (options.apiKey && options.apiKey.startsWith('sk-or-') ? options.apiKey : null) ||
+    process.env.OPENROUTER_API_KEY ||
+    localConfig.openrouter_api_key ||
+    localConfig.fallback_openrouter_api_key ||
+    (localConfig.api_key && localConfig.api_key.startsWith('sk-or-') ? localConfig.api_key : null);
+
+  return { typesafeKey, openrouterKey };
 }
 
 export class JevClient {
   constructor(options = {}) {
-    this.apiKey = resolveApiKey(options);
-    if (!this.apiKey) {
+    const { typesafeKey, openrouterKey } = resolveCredentials(options);
+
+    this.typesafeKey = typesafeKey;
+    this.openrouterKey = openrouterKey;
+    this.timeout = options.timeout || 15000;
+
+    // Determine primary provider
+    if (options.provider === 'openrouter' || (!this.typesafeKey && this.openrouterKey)) {
+      this.primaryProvider = 'openrouter';
+      this.primaryKey = this.openrouterKey;
+      this.primaryBaseUrl = options.baseUrl || OPENROUTER_ENDPOINT;
+      this.primaryModel = options.model || OPENROUTER_MODEL;
+
+      this.fallbackProvider = this.typesafeKey ? 'typesafe' : null;
+      this.fallbackKey = this.typesafeKey;
+      this.fallbackBaseUrl = TYPESAFE_ENDPOINT;
+      this.fallbackModel = TYPESAFE_MODEL;
+    } else if (this.typesafeKey) {
+      this.primaryProvider = 'typesafe';
+      this.primaryKey = this.typesafeKey;
+      this.primaryBaseUrl = options.baseUrl || TYPESAFE_ENDPOINT;
+      this.primaryModel = options.model || TYPESAFE_MODEL;
+
+      this.fallbackProvider = this.openrouterKey ? 'openrouter' : null;
+      this.fallbackKey = this.openrouterKey;
+      this.fallbackBaseUrl = OPENROUTER_ENDPOINT;
+      this.fallbackModel = OPENROUTER_MODEL;
+    } else {
       throw new Error(
-        'Missing API key. Please set OPENROUTER_API_KEY or TYPESAFE_API_KEY environment variable.'
+        'Missing API key. Please set TYPESAFE_API_KEY or OPENROUTER_API_KEY environment variable.'
       );
     }
-    const isTypesafe = this.apiKey.startsWith('ts-') || options.provider === 'typesafe';
-    this.provider = isTypesafe ? 'typesafe' : 'openrouter';
-    this.baseUrl =
-      options.baseUrl || (isTypesafe ? TYPESAFE_ENDPOINT : OPENROUTER_ENDPOINT);
-    this.model =
-      options.model || (isTypesafe ? TYPESAFE_MODEL : OPENROUTER_MODEL);
-    this.timeout = options.timeout || 15000;
+
+    // Retain backward compatibility properties
+    this.provider = this.primaryProvider;
+    this.apiKey = this.primaryKey;
+    this.baseUrl = this.primaryBaseUrl;
+    this.model = this.primaryModel;
   }
 
-  async decide(state, questions, options = {}) {
+  async _executeRequest(baseUrl, apiKey, model, state, questions) {
     const payload = {
-      model: options.model || this.model,
+      model,
       state: typeof state === 'string' ? state : JSON.stringify(state),
       questions,
     };
@@ -58,10 +100,10 @@ export class JevClient {
     const timer = setTimeout(() => controller.abort(), this.timeout);
 
     try {
-      const response = await fetch(this.baseUrl, {
+      const response = await fetch(baseUrl, {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${this.apiKey}`,
+          Authorization: `Bearer ${apiKey}`,
           'Content-Type': 'application/json',
           'HTTP-Referer': 'https://typesafe.ai',
           'X-Title': 'Universal-Jev-Plugin',
@@ -83,7 +125,7 @@ export class JevClient {
       }
 
       return {
-        model: data.model || this.model,
+        model: data.model || model,
         answers: data.answers,
         usage: data.usage || null,
       };
@@ -93,6 +135,40 @@ export class JevClient {
         throw new Error(`Jev API request timed out after ${this.timeout}ms`);
       }
       throw err;
+    }
+  }
+
+  async decide(state, questions, options = {}) {
+    const targetModel = options.model || this.primaryModel;
+
+    try {
+      return await this._executeRequest(
+        this.primaryBaseUrl,
+        this.primaryKey,
+        targetModel,
+        state,
+        questions
+      );
+    } catch (primaryErr) {
+      if (this.fallbackKey && this.fallbackBaseUrl) {
+        // Attempt fallback transparently
+        try {
+          const fallbackModel = this.fallbackModel;
+          return await this._executeRequest(
+            this.fallbackBaseUrl,
+            this.fallbackKey,
+            fallbackModel,
+            state,
+            questions
+          );
+        } catch (fallbackErr) {
+          throw new Error(
+            `Primary provider (${this.primaryProvider}) failed: ${primaryErr.message}; ` +
+            `Fallback provider (${this.fallbackProvider}) also failed: ${fallbackErr.message}`
+          );
+        }
+      }
+      throw primaryErr;
     }
   }
 }
