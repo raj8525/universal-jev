@@ -5,8 +5,14 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN_DIR="$HOME/.local/bin"
 
 echo "========================================================"
-echo "    Installing Universal TypeSafe Jev Plugin / MCP      "
+echo "    Installing / Updating Universal TypeSafe Jev        "
 echo "========================================================"
+
+# 0. Auto-pull latest commits if executed inside git clone
+if [ -d "$DIR/.git" ] && command -v git >/dev/null 2>&1; then
+  echo "Checking and pulling latest updates from GitHub..."
+  git -C "$DIR" pull --ff-only 2>/dev/null || echo "Note: Keeping current git working tree."
+fi
 
 # 1. Check Node.js
 if ! command -v node >/dev/null 2>&1; then
@@ -112,6 +118,31 @@ else
 }
 EOF
   echo "✓ Antigravity: created mcp_config.json"
+fi
+
+if [ -d "$HOME/.gemini/antigravity-cli/mcp/jev" ]; then
+  node -e '
+    const fs = require("fs");
+    const path = process.env.HOME + "/.gemini/antigravity-cli/mcp/jev/jev_receipt.json";
+    try {
+      const schema = {
+        name: "jev_receipt",
+        description: "Audit and dehydrate long terminal or tool output into a verified receipt or isolated diagnostic with 100% LLM transparency.",
+        parameters: {
+          properties: {
+            command: { description: "Command or tool name executed", type: "string" },
+            output: { description: "Raw long terminal or tool output to dehydrate", type: "string" },
+            thresholdChars: { description: "Threshold chars to trigger dehydration (default 1200)", type: "number" },
+            exitCode: { description: "Process exit status code if known (non-zero triggers instant diagnostic)", type: "number" }
+          },
+          required: ["output"],
+          type: "object"
+        }
+      };
+      fs.writeFileSync(path, JSON.stringify(schema, null, 2));
+      console.log("✓ Antigravity: updated jev_receipt schema");
+    } catch (e) {}
+  '
 fi
 
 # 3.4 Pi / Universal .agents
